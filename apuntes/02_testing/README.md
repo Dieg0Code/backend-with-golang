@@ -277,3 +277,187 @@ func TestGetUserNotFoundInDatabase(t *testing.T) {
 ```
 
 En donde se crea un mock del servicio, se le dice que cuando se llame al método `GetUser` con el argumento `0`, retorne `nil` y un error, se crea una instancia del servicio con el mock y se llama al método `GetUser` con el argumento `0`, se verifica que el usuario sea `nil`, que el error no sea `nil`, que el status del error sea `404` y que el código del error sea `not_found`.
+
+## Http Frameworks
+
+Go trae de base todas las herramientas necesarias para crear un servidor HTTP, lo cual es algo bueno, pero a medida que vamos usando eso nos vamos dando cuenta de que hay muchas cosas que son repetitivas y que en cierta manera estamos reinventando la rueda cada vez que queremos sacar los headers de una request o parsear a JSOn una response que queremos devolver. Para resolver este tipo de problemas existen los llamados frameworks, que traen una serie de herramientas que abstraen toda esta complejidad y nos permiten enfocarnos en lo que realmente importa, que es la lógica de negocio. Algunos de los frameworks mas populares en Go son:
+
+- **Gin**.
+- **Echo**.
+- **Fiber**.
+- **Buffalo**.
+
+En este caso vamos a ver como usar `Gin`, que es uno de los mas populares y mas usados en la comunidad de Go.
+
+### Gin
+
+```go
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+var (
+	router *gin.Engine
+)
+
+func init() {
+	router = gin.Default()
+	router1 = gin.New()
+}
+```
+
+Gin nos brinda un Engine que es el que se encarga de manejar las rutas, los middlewares y los handlers, para crear un Engine se puede hacer de dos formas, con `gin.Default()` o con `gin.New()`, la diferencia entre ambos es que `gin.Default()` nos trae un Engine con algunos middlewares ya configurados, como por ejemplo un middleware que loggea las requests, mientras que `gin.New()` nos trae un Engine vacío, sin ningún middleware configurado. El default también tiene un mecanismo de recovery, es decir, si una request falla, el servidor no se cae, sino que devuelve un error 500.
+
+```go
+func main() {
+	router.GET("/users", func(c *gin.Context) {
+		c.JSON(http.StatusOK, map[string]string{"message": "GET"})
+	})
+
+	router.POST("/users", func(c *gin.Context) {
+		c.JSON(http.StatusOK, map[string]string{"message": "POST"})
+	})
+
+	router.Run(":8080")
+}
+```
+
+Un router es básicamente un manejador de rutas, es el lugar donde se definen las rutas las cuales van a recibir las peticiones y en donde se define el handler quien es el encargado de procesar la petición y responder en base a la lógica de negocio. En este caso estamos definiendo dos rutas, una para el método GET y otra para el método POST, en donde ambas responden con un JSON con un mensaje. Las funciones Handler pueden ser definidas aparte para tener un mejor orden en el código.
+
+```go
+func getUsers(c *gin.Context) {
+	c.JSON(http.StatusOK, map[string]string{"message": "GET"})
+}
+
+func createUser(c *gin.Context) {
+	c.JSON(http.StatusOK, map[string]string{"message": "POST"})
+}
+
+func main() {
+	router.GET("/users", getUsers)
+	router.POST("/users", createUser)
+
+	router.Run(":8080")
+}
+```
+
+Gin se encarga de hacer el parseo de la respuesta a JSON, por lo que no tenemos que preocuparnos de esto.
+
+```go
+c.JSON(http.StatusOK, map[string]string{"message": "GET"})
+```
+
+Esta función recibe el código de estado y la respuesta, se encarga de construir el JSON y responde el código de estado.
+
+Un controlador es una función que se encarga de manejar una petición HTTP, en este caso `getUsers` y `createUser` son controladores, se encargan de manejar las peticiones GET y POST respectivamente.
+
+Pero en un caso mas complejo, un controlador se vería de la siguiente forma:
+
+```go
+package controllers
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/dieg0code/go-microservices/services"
+	"github.com/dieg0code/go-microservices/utils"
+	"github.com/gin-gonic/gin"
+)
+
+func GetUser(c *gin.Context) {
+
+	userIdParam := c.Param("user_id")
+	userId, err := strconv.ParseInt(userIdParam, 10, 64)
+
+	if err != nil {
+		apiErr := &utils.ApplicationError{
+			Message: "user_id must be a number",
+			Status:  http.StatusBadRequest,
+			Code:    "bad_request",
+		}
+
+		c.JSON(apiErr.Status, apiErr)
+		return
+	}
+
+	user, apiErr := services.UserService.GetUser(userId)
+	if apiErr != nil {
+		c.JSON(apiErr.Status, apiErr)
+		return
+	}
+
+	c.JSON(http.StatusOK, user)
+
+}
+```
+
+Con la variable `c` pasamos el contexto de gin, con esto podemos acceder a varias herramientas, como por ejemplo `c.Param` que nos permite capturar parámetros de la URL, también podemos construir respuestas con `c.JSON` y devolverlas al cliente.
+
+Gin acepta varios formatos de respuesta, como XML por ejemplo, si en la petición se manda un header `Accept: application/xml`, Gin puede ver esto y actuar en consecuencia por ejemplo:
+
+```go
+// controller_utils.go
+package utils
+
+import "github.com/gin-gonic/gin"
+
+func Respong(c *gin.Context, status int, body interface{}) {
+	if c.GetHeader("Accept") == "application/xml" {
+		c.XML(status, body)
+		return
+	}
+
+	c.JSON(status, body)
+}
+```
+
+Aquí estamos definido como responder cuando la petición pide que la respuesta sea en XML mediante el header `Accept`, si es así, respondemos con XML, si no, respondemos con JSON.
+
+```go
+// controllers/user_controller.go
+package controllers
+
+import (
+	"net/http"
+	"strconv"
+
+	"github.com/dieg0code/go-microservices/services"
+	"github.com/dieg0code/go-microservices/utils"
+	"github.com/gin-gonic/gin"
+)
+
+func GetUser(c *gin.Context) {
+
+	userIdParam := c.Param("user_id")
+	userId, err := strconv.ParseInt(userIdParam, 10, 64)
+
+	if err != nil {
+		apiErr := &utils.ApplicationError{
+			Message: "user_id must be a number",
+			Status:  http.StatusBadRequest,
+			Code:    "bad_request",
+		}
+
+		utils.Respong(c, apiErr.Status, apiErr)
+		// c.JSON(apiErr.Status, apiErr)
+		return
+	}
+
+	user, apiErr := services.UserService.GetUser(userId)
+	if apiErr != nil {
+		utils.Respong(c, apiErr.Status, apiErr)
+		// c.JSON(apiErr.Status, apiErr)
+		return
+	}
+
+	utils.Respong(c, http.StatusOK, user)
+	// c.JSON(http.StatusOK, user)
+
+}
+```
+
+Debemos modificar el controlador para que use la función `Respong` y así poder responder en XML o JSON dependiendo de la petición.
